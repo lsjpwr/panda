@@ -2,6 +2,7 @@ import time
 import unittest
 
 from opendbc.car.structs import CarParams
+from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from panda import Panda
 from panda.tests.hitl.base import PandaTestCase, panda_test
 
@@ -147,6 +148,40 @@ class TestSafety(PandaTestCase):
       assert h['faults'] & (1 << FAULT_MPU_BIT)
       assert h['safety_mode'] == CarParams.SafetyModel.allOutput
     p.reset()
+
+  @unittest.skipIf(FAULT_MPU_BIT in PERMANENT_FAULT_BITS, "a permanent FAULT_MPU makes any write a HardFault")
+  def test_mpu_fault_lateral(self):
+    p = self.p
+    p.set_safety_mode(CarParams.SafetyModel.allOutput)
+    assert not (p.health()['faults'] & (1 << FAULT_MPU_BIT))
+    p.inject_mpu_fault(lateral=True)
+    t = time.monotonic()
+    while not ((h := p.health())['faults'] & (1 << FAULT_MPU_BIT)) and (time.monotonic() - t) < 2.5:
+      time.sleep(0.05)
+    assert h['faults'] & (1 << FAULT_MPU_BIT)
+    p.reset()
+
+  def test_heartbeat_lost_exits_mads(self):
+    p = self.p
+    p.set_alternative_experience(ALTERNATIVE_EXPERIENCE.ENABLE_MADS)
+    p.set_safety_mode(CarParams.SafetyModel.allOutput)
+    p.set_can_loopback(True)
+    p.send_heartbeat(engaged=False, engaged_mads=True)
+    # MADS engages lateral at the first RX frame
+    p.can_send(0x1aa, b"message", 0)
+
+    t = time.monotonic()
+    while (h := p.health())['controls_allowed'] and (time.monotonic() - t) < HEARTBEAT_ENGAGED_MISMATCHES + 1:
+      p.send_heartbeat(engaged=False, engaged_mads=True)
+      time.sleep(0.1)
+    assert not h['controls_allowed']
+    assert h['controls_allowed_lateral']
+
+    t = time.monotonic()
+    while (h := p.health())['safety_mode'] != CarParams.SafetyModel.silent and (time.monotonic() - t) < 8:
+      time.sleep(0.1)
+    assert h['safety_mode'] == CarParams.SafetyModel.silent
+    assert not h['controls_allowed_lateral']
 
   def test_stack_overflow_resets_to_silent(self):
     p = self.p
