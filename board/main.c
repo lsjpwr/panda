@@ -113,6 +113,12 @@ static void __attribute__ ((noinline)) enable_fpu(void) {
 #define HEARTBEAT_IGNITION_CNT_ON 5U
 #define HEARTBEAT_IGNITION_CNT_OFF 2U
 
+// MADS counts for the sirens only while it can steer: heartbeat_engaged_mads stays set while sunnypilot pauses
+// lateral, e.g. parked in P, and a brake pause already clears controls_allowed_lateral
+static bool siren_engaged(void) {
+  return safety.heartbeat_engaged || (safety.heartbeat_engaged_mads && safety.controls_allowed_lateral && safety.vehicle_moving);
+}
+
 // called at 8Hz
 static void tick_handler(void) {
   if ((TICK_TIMER->SR & TIM_SR_UIF) != 0U) {
@@ -126,7 +132,7 @@ static void tick_handler(void) {
     heartbeat_tick_counter += 1U;
 
     // start the siren early on power loss while engaged
-    if ((safety.heartbeat_engaged || safety.heartbeat_engaged_mads) && (heartbeat_tick_counter > 2U) && (current_board->read_voltage_mV() < 6000U)) {
+    if (siren_engaged() && (heartbeat_tick_counter > 2U) && (current_board->read_voltage_mV() < 6000U)) {
       siren_countdown = 3U;
     }
 
@@ -206,7 +212,7 @@ static void tick_handler(void) {
           puth(heartbeat_counter);
           print(" seconds. Safety is set to SILENT mode.\n");
 
-          if (safety.heartbeat_engaged || safety.heartbeat_engaged_mads) {
+          if (siren_engaged()) {
             siren_countdown = 3U;
           }
 
